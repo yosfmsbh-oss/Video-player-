@@ -1,9 +1,15 @@
 package com.videoplayer.app
 
+import android.app.Activity
 import android.graphics.Bitmap
+import android.os.Build
 import android.util.LruCache
 import android.util.Size
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -41,6 +47,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
@@ -51,6 +59,7 @@ import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -115,15 +124,67 @@ fun LibraryScreen(
     var album by rememberSaveable { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
-    var favs by remember { mutableStateOf(prefs.favorites()) }
+    val favs = prefs.favs
+    val context = LocalContext.current
+    var actionItem by remember { mutableStateOf<VideoItem?>(null) }
+    var renameItem by remember { mutableStateOf<VideoItem?>(null) }
+    var deleteItem by remember { mutableStateOf<VideoItem?>(null) }
+    var pending by remember { mutableStateOf<PendingOp?>(null) }
+    var granted by remember { mutableStateOf<PendingOp?>(null) }
     var autoplay by remember { mutableStateOf(prefs.autoplay) }
     var autoRotate by remember { mutableStateOf(prefs.autoRotate) }
+    var bgPlay by remember { mutableStateOf(prefs.backgroundPlay) }
     val focus = LocalFocusManager.current
     val sortNames = listOf(
         stringResource(R.string.sort_date),
         stringResource(R.string.sort_name),
         stringResource(R.string.sort_size)
     )
+
+    val opLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val op = pending
+        pending = null
+        if (op != null && result.resultCode == Activity.RESULT_OK) granted = op
+    }
+
+    fun execute(op: PendingOp, afterGrant: Boolean) {
+        val result = when (op) {
+            is PendingOp.Delete ->
+                // أندرويد 11+: النظام نفّذ الحذف بنفسه بعد الموافقة
+                if (afterGrant && Build.VERSION.SDK_INT >= 30) MediaOp.Success
+                else requestDelete(context, op.item)
+            is PendingOp.Rename -> requestRename(context, op.item, op.newTitle)
+        }
+        when (result) {
+            MediaOp.Success -> {
+                if (op is PendingOp.Delete) {
+                    prefs.saveFavorites(prefs.favs - op.item.id)
+                    prefs.savePosition(op.item.uri.toString(), 0L)
+                }
+                val msg = if (op is PendingOp.Delete) R.string.toast_deleted else R.string.toast_renamed
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                onRefresh()
+            }
+            is MediaOp.Confirm ->
+                if (afterGrant) {
+                    Toast.makeText(context, R.string.toast_failed, Toast.LENGTH_SHORT).show()
+                } else {
+                    pending = op
+                    opLauncher.launch(IntentSenderRequest.Builder(result.sender).build())
+                }
+            MediaOp.Failure ->
+                Toast.makeText(context, R.string.toast_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(granted) {
+        granted?.let {
+            granted = null
+            execute(it, afterGrant = true)
+        }
+    }
 
     BackHandler(album != null) { album = null }
 
@@ -271,10 +332,8 @@ fun LibraryScreen(
                         items = visible,
                         favs = favs,
                         onPlay = { onPlay(PlayRequest(it.uri, it.title)) },
-                        onFav = { v ->
-                            favs = if (v.id in favs) favs - v.id else favs + v.id
-                            prefs.saveFavorites(favs)
-                        }
+                        onFav = { v -> prefs.toggleFavorite(v.id) },
+                        onLongPress = { actionItem = it }
                     )
                 }
             }
@@ -298,6 +357,84 @@ fun LibraryScreen(
         }
     }
 
+    actionItem?.let { v ->
+        AlertDialog(
+            onDismissRequest = { actionItem = null },
+            confirmButton = {
+                TextButton(onClick = { actionItem = null }) { Text(stringResource(R.string.cancel)) }
+            },
+            title = { Text(v.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column {
+                    ActionRow(Icons.Rounded.Share, stringResource(R.string.share)) {
+                        actionItem = null
+                        shareVideo(context, v)
+                    }
+                    ActionRow(Icons.Rounded.Edit, stringResource(R.string.rename)) {
+                        actionItem = null
+                        renameItem = v
+                    }
+                    ActionRow(
+                        Icons.Rounded.Delete,
+                        stringResource(R.string.delete),
+                        MaterialTheme.colorScheme.error
+                    ) {
+                        actionItem = null
+                        // أندرويد 11+ يعرض نافذة تأكيد من النظام، فلا نكرر السؤال
+                        if (Build.VERSION.SDK_INT >= 30) execute(PendingOp.Delete(v), afterGrant = false)
+                        else deleteItem = v
+                    }
+                }
+            }
+        )
+    }
+
+    renameItem?.let { v ->
+        var text by remember(v.id) { mutableStateOf(v.title) }
+        AlertDialog(
+            onDismissRequest = { renameItem = null },
+            title = { Text(stringResource(R.string.rename)) },
+            text = {
+                TextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    placeholder = { Text(stringResource(R.string.rename_hint)) }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = sanitizeFileName(text).isNotEmpty(),
+                    onClick = {
+                        renameItem = null
+                        val clean = sanitizeFileName(text)
+                        if (clean != v.title) execute(PendingOp.Rename(v, clean), afterGrant = false)
+                    }
+                ) { Text(stringResource(R.string.save)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameItem = null }) { Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+
+    deleteItem?.let { v ->
+        AlertDialog(
+            onDismissRequest = { deleteItem = null },
+            title = { Text(stringResource(R.string.delete_title)) },
+            text = { Text(stringResource(R.string.delete_message, v.title)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteItem = null
+                    execute(PendingOp.Delete(v), afterGrant = false)
+                }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteItem = null }) { Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+
     if (settings) {
         AlertDialog(
             onDismissRequest = { settings = false },
@@ -313,9 +450,32 @@ fun LibraryScreen(
                         autoRotate = it
                         prefs.autoRotate = it
                     }
+                    SwitchRow(stringResource(R.string.settings_background), bgPlay) {
+                        bgPlay = it
+                        prefs.backgroundPlay = it
+                    }
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun ActionRow(
+    icon: ImageVector,
+    label: String,
+    color: Color = Color.Unspecified,
+    onClick: () -> Unit
+) {
+    val tint = if (color == Color.Unspecified) MaterialTheme.colorScheme.onSurface else color
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = tint)
+        Spacer(Modifier.width(16.dp))
+        Text(label, color = tint, fontSize = 16.sp)
     }
 }
 
@@ -399,7 +559,8 @@ fun VideoList(
     items: List<VideoItem>,
     favs: Set<Long>,
     onPlay: (VideoItem) -> Unit,
-    onFav: (VideoItem) -> Unit
+    onFav: (VideoItem) -> Unit,
+    onLongPress: (VideoItem) -> Unit
 ) {
     if (items.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -422,7 +583,7 @@ fun VideoList(
                         onClick = { onPlay(v) },
                         onLongClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onFav(v)
+                            onLongPress(v)
                         }
                     )
                     .padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),

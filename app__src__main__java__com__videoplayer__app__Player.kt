@@ -1,11 +1,16 @@
 package com.videoplayer.app
 
+import android.Manifest
 import android.app.Activity
 import android.app.PictureInPictureParams
+import android.content.ContentUris
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.media.AudioManager
+import android.os.Build
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Rational
 import android.view.WindowManager
@@ -42,10 +47,14 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ClosedCaption
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Forward10
+import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.ScreenRotation
@@ -93,6 +102,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.PictureInPictureModeChangedInfo
+import androidx.core.content.ContextCompat
 import androidx.core.util.Consumer
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -131,6 +141,7 @@ fun GlassButton(
     size: Dp,
     iconSize: Dp,
     alpha: Float = 0.18f,
+    tint: Color = Color.White,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
@@ -139,7 +150,7 @@ fun GlassButton(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, contentDescription = description, tint = Color.White, modifier = Modifier.size(iconSize))
+        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(iconSize))
     }
 }
 
@@ -189,6 +200,13 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val key = req.uri.toString()
     val autoplay = remember { prefs.autoplay }
+    // معرّف الفيديو في المكتبة (غير متاح للملفات المفتوحة من خارج المكتبة)
+    val mediaId = remember(req.uri) {
+        runCatching {
+            if (req.uri.authority == MediaStore.AUTHORITY) ContentUris.parseId(req.uri) else null
+        }.getOrNull()
+    }
+    val isFav = mediaId != null && mediaId in prefs.favs
 
     val exo = remember(key) {
         ExoPlayer.Builder(context)
@@ -239,6 +257,7 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
     var touch by remember { mutableIntStateOf(0) }
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
+    var bgPlay by remember { mutableStateOf(prefs.backgroundPlay) }
     var openMenu by remember { mutableIntStateOf(0) } // 0 لا شيء، 1 سرعة، 2 ترجمة/صوت، 3 حجم العرض
     var inPip by remember { mutableStateOf(activity?.isInPictureInPictureMode == true) }
     var pipRequested by remember { mutableStateOf(false) }
@@ -248,12 +267,29 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
     var brightness by remember { mutableFloatStateOf(0.5f) }
     var volume by remember { mutableFloatStateOf(0.5f) }
 
+    val pipSupported = remember {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+    }
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
 
     fun showHud(text: String, align: Alignment) {
         hud = text
         hudAlign = align
         hudTick++
+    }
+
+    fun toggleBackground() {
+        bgPlay = !bgPlay
+        prefs.backgroundPlay = bgPlay
+        if (bgPlay && Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        showHud(context.getString(if (bgPlay) R.string.bg_on else R.string.bg_off), Alignment.Center)
     }
 
     fun savePosition() {
@@ -310,15 +346,25 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
     DisposableEffect(exo) {
         onDispose {
             savePosition()
+            PlaybackService.release(context)
             exo.release()
         }
     }
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
         savePosition()
-        if (!inPip && !pipRequested) exo.pause()
+        if (!inPip && !pipRequested) {
+            // التشغيل في الخلفية: نُبقي الصوت يعمل عبر خدمة أمامية بدل الإيقاف
+            if (bgPlay && exo.isPlaying) PlaybackService.start(context, exo, req.title) else exo.pause()
+        }
     }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
-        if (activity?.isInPictureInPictureMode != true) exo.pause()
+        if (activity?.isInPictureInPictureMode != true) {
+            if (bgPlay && exo.isPlaying) PlaybackService.start(context, exo, req.title) else exo.pause()
+        }
+    }
+    // عند الرجوع للتطبيق تُزال خدمة الخلفية ويكمل التشغيل داخل الواجهة
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        PlaybackService.stop(context)
     }
 
     // ---- صورة داخل صورة ----
@@ -597,7 +643,37 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
                         textAlign = TextAlign.Center,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                     )
-                    Spacer(Modifier.size(48.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        GlassButton(
+                            Icons.Rounded.Headphones,
+                            stringResource(R.string.bg_play),
+                            44.dp, 20.dp,
+                            tint = if (bgPlay) Color(0xFF64D2FF) else Color.White
+                        ) {
+                            toggleBackground()
+                            touch++
+                        }
+                        if (pipSupported) {
+                            GlassButton(Icons.Rounded.PictureInPictureAlt, stringResource(R.string.pip), 44.dp, 20.dp) {
+                                activity?.let { pipRequested = enterPip(it, exo) }
+                            }
+                        }
+                        if (mediaId != null) {
+                            GlassButton(
+                                if (isFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                stringResource(if (isFav) R.string.fav_remove else R.string.fav_add),
+                                44.dp, 20.dp,
+                                tint = if (isFav) Color(0xFFFF3B30) else Color.White
+                            ) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                prefs.toggleFavorite(mediaId)
+                                touch++
+                            }
+                        }
+                    }
                 }
 
                 // أزرار التشغيل واتجاه الخط الزمني دائماً من اليسار لليمين (متسق مع النقر المزدوج)

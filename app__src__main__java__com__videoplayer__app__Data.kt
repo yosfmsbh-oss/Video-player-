@@ -10,7 +10,10 @@ import android.os.Build
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import java.util.Locale
 
@@ -152,17 +155,34 @@ fun videoCountText(context: Context, n: Int): String =
 class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("prefs", Context.MODE_PRIVATE)
 
-    fun favorites(): Set<Long> =
+    /** المفضلة كحالة قابلة للمراقبة، فتتزامن المكتبة والمشغّل تلقائياً. */
+    var favs: Set<Long> by mutableStateOf(loadFavorites())
+        private set
+
+    private fun loadFavorites(): Set<Long> =
         (sp.getStringSet("fav", emptySet()) ?: emptySet()).mapNotNull { it.toLongOrNull() }.toSet()
 
+    fun favorites(): Set<Long> = favs
+
     fun saveFavorites(ids: Set<Long>) {
+        favs = ids
         sp.edit().putStringSet("fav", ids.map { it.toString() }.toSet()).apply()
+    }
+
+    fun toggleFavorite(id: Long) {
+        saveFavorites(if (id in favs) favs - id else favs + id)
     }
 
     var autoplay: Boolean
         get() = sp.getBoolean("autoplay", true)
         set(value) {
             sp.edit().putBoolean("autoplay", value).apply()
+        }
+
+    var backgroundPlay: Boolean
+        get() = sp.getBoolean("bgplay", false)
+        set(value) {
+            sp.edit().putBoolean("bgplay", value).apply()
         }
 
     var autoRotate: Boolean
