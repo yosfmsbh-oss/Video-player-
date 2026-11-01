@@ -26,6 +26,7 @@ sealed interface PendingOp {
 
     data class Delete(override val item: VideoItem) : PendingOp
     data class Rename(override val item: VideoItem, val newTitle: String) : PendingOp
+    data class Move(override val item: VideoItem, val relativePath: String) : PendingOp
 }
 
 fun shareVideo(context: Context, item: VideoItem) {
@@ -63,20 +64,15 @@ fun requestDelete(context: Context, uri: Uri): MediaOp {
 fun sanitizeFileName(name: String): String =
     name.replace(Regex("[\\\\/:*?\"<>|\\n\\r]"), "_").trim().trim('.')
 
-/** إعادة التسمية مع الحفاظ على الامتداد. */
-fun requestRename(context: Context, item: VideoItem, newTitle: String): MediaOp {
-    val clean = sanitizeFileName(newTitle)
-    if (clean.isEmpty()) return MediaOp.Failure
-    val ext = queryFullName(context, item.uri).substringAfterLast('.', "")
-    val fileName = if (ext.isNotEmpty()) "$clean.$ext" else clean
-    val values = ContentValues().apply { put(MediaStore.Video.Media.DISPLAY_NAME, fileName) }
+/** تحديث بيانات ملف في MediaStore مع طلب الإذن عند الحاجة. */
+private fun updateMedia(context: Context, uri: Uri, values: ContentValues): MediaOp {
     val resolver = context.contentResolver
     return try {
-        if (resolver.update(item.uri, values, null, null) > 0) MediaOp.Success else MediaOp.Failure
+        if (resolver.update(uri, values, null, null) > 0) MediaOp.Success else MediaOp.Failure
     } catch (e: SecurityException) {
         when {
             Build.VERSION.SDK_INT >= 30 -> runCatching {
-                MediaOp.Confirm(MediaStore.createWriteRequest(resolver, listOf(item.uri)).intentSender)
+                MediaOp.Confirm(MediaStore.createWriteRequest(resolver, listOf(uri)).intentSender)
             }.getOrDefault(MediaOp.Failure)
             e is RecoverableSecurityException -> MediaOp.Confirm(e.userAction.actionIntent.intentSender)
             else -> MediaOp.Failure
@@ -84,4 +80,22 @@ fun requestRename(context: Context, item: VideoItem, newTitle: String): MediaOp 
     } catch (e: Exception) {
         MediaOp.Failure
     }
+}
+
+/** إعادة التسمية مع الحفاظ على الامتداد. */
+fun requestRename(context: Context, item: VideoItem, newTitle: String): MediaOp {
+    val clean = sanitizeFileName(newTitle)
+    if (clean.isEmpty()) return MediaOp.Failure
+    val ext = queryFullName(context, item.uri).substringAfterLast('.', "")
+    val fileName = if (ext.isNotEmpty()) "$clean.$ext" else clean
+    val values = ContentValues().apply { put(MediaStore.Video.Media.DISPLAY_NAME, fileName) }
+    return updateMedia(context, item.uri, values)
+}
+
+/** نقل الفيديو إلى مجلد (ألبوم) آخر عبر تغيير المسار النسبي. */
+fun requestMove(context: Context, item: VideoItem, relativePath: String): MediaOp {
+    val path = relativePath.trim().let { if (it.endsWith("/")) it else "$it/" }
+    if (path == "/" || path.isBlank()) return MediaOp.Failure
+    val values = ContentValues().apply { put(MediaStore.Video.Media.RELATIVE_PATH, path) }
+    return updateMedia(context, item.uri, values)
 }

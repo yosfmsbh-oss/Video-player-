@@ -37,6 +37,11 @@
     <string name="cancel">إلغاء</string>
     <string name="save">حفظ</string>
     <string name="rename_hint">الاسم الجديد</string>
+    <string name="move">نقل إلى ألبوم</string>
+    <string name="move_title">نقل إلى…</string>
+    <string name="new_album">ألبوم جديد</string>
+    <string name="new_album_hint">اسم الألبوم</string>
+    <string name="toast_moved">تم النقل</string>
     <string name="delete_title">حذف الفيديو؟</string>
     <string name="delete_message">سيتم حذف «%1$s» نهائياً من جهازك.</string>
     <string name="toast_deleted">تم الحذف</string>

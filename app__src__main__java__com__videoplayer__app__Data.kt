@@ -25,7 +25,8 @@ data class VideoItem(
     val size: Long,
     val dateAdded: Long,
     val album: String,
-    val height: Int
+    val height: Int,
+    val relativePath: String = ""
 )
 
 data class PlayRequest(val uri: Uri, val title: String)
@@ -80,7 +81,8 @@ fun loadVideos(context: Context): List<VideoItem> {
         MediaStore.Video.Media.SIZE,
         MediaStore.Video.Media.DATE_ADDED,
         MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
-        MediaStore.Video.Media.HEIGHT
+        MediaStore.Video.Media.HEIGHT,
+        MediaStore.Video.Media.RELATIVE_PATH
     )
     runCatching {
         context.contentResolver.query(
@@ -93,6 +95,7 @@ fun loadVideos(context: Context): List<VideoItem> {
             val dateCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
             val bucketCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
             val heightCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT)
+            val pathCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.RELATIVE_PATH)
             while (c.moveToNext()) {
                 val id = c.getLong(idCol)
                 result += VideoItem(
@@ -103,7 +106,8 @@ fun loadVideos(context: Context): List<VideoItem> {
                     size = c.getLong(sizeCol),
                     dateAdded = c.getLong(dateCol),
                     album = c.getString(bucketCol) ?: other,
-                    height = c.getInt(heightCol)
+                    height = c.getInt(heightCol),
+                    relativePath = c.getString(pathCol) ?: ""
                 )
             }
         }

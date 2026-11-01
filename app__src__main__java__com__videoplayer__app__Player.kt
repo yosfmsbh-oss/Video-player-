@@ -389,7 +389,6 @@ fun PlayerScreen(
         exo.pause()
         userSwitched = true
         onChange(playlist[target])
-        showHud(playlist[target].title, Alignment.Center)
         return true
     }
 

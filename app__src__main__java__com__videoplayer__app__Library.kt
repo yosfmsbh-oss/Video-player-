@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -48,10 +50,11 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.MoreHoriz
@@ -129,6 +132,8 @@ fun LibraryScreen(
     var actionItem by remember { mutableStateOf<VideoItem?>(null) }
     var renameItem by remember { mutableStateOf<VideoItem?>(null) }
     var deleteItem by remember { mutableStateOf<VideoItem?>(null) }
+    var moveItem by remember { mutableStateOf<VideoItem?>(null) }
+    var newAlbumItem by remember { mutableStateOf<VideoItem?>(null) }
     var pending by remember { mutableStateOf<PendingOp?>(null) }
     var approvedOp by remember { mutableStateOf<PendingOp?>(null) }
     var autoplay by remember { mutableStateOf(prefs.autoplay) }
@@ -156,6 +161,7 @@ fun LibraryScreen(
                 if (afterGrant && Build.VERSION.SDK_INT >= 30) MediaOp.Success
                 else requestDelete(context, op.item.uri)
             is PendingOp.Rename -> requestRename(context, op.item, op.newTitle)
+            is PendingOp.Move -> requestMove(context, op.item, op.relativePath)
         }
         when (result) {
             MediaOp.Success -> {
@@ -163,7 +169,11 @@ fun LibraryScreen(
                     prefs.saveFavorites(prefs.favs - op.item.id)
                     prefs.savePosition(op.item.uri.toString(), 0L)
                 }
-                val msg = if (op is PendingOp.Delete) R.string.toast_deleted else R.string.toast_renamed
+                val msg = when (op) {
+                    is PendingOp.Delete -> R.string.toast_deleted
+                    is PendingOp.Rename -> R.string.toast_renamed
+                    is PendingOp.Move -> R.string.toast_moved
+                }
                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 onRefresh()
             }
@@ -379,6 +389,10 @@ fun LibraryScreen(
                         actionItem = null
                         renameItem = v
                     }
+                    ActionRow(Icons.Rounded.Folder, stringResource(R.string.move)) {
+                        actionItem = null
+                        moveItem = v
+                    }
                     ActionRow(
                         Icons.Rounded.Delete,
                         stringResource(R.string.delete),
@@ -419,6 +433,65 @@ fun LibraryScreen(
             },
             dismissButton = {
                 TextButton(onClick = { renameItem = null }) { Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+
+    moveItem?.let { v ->
+        // الألبومات الموجودة (ما عدا الحالي) مع مسار كل ألبوم
+        val targets = remember(videos, v.id) {
+            videos.filter { it.album != v.album && it.relativePath.isNotBlank() }
+                .groupBy { it.album }
+                .map { (name, list) -> name to list.first().relativePath }
+                .sortedBy { it.first.lowercase() }
+        }
+        AlertDialog(
+            onDismissRequest = { moveItem = null },
+            title = { Text(stringResource(R.string.move_title)) },
+            text = {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    ActionRow(Icons.Rounded.CreateNewFolder, stringResource(R.string.new_album)) {
+                        moveItem = null
+                        newAlbumItem = v
+                    }
+                    targets.forEach { (name, path) ->
+                        ActionRow(Icons.Rounded.Folder, name) {
+                            moveItem = null
+                            execute(PendingOp.Move(v, path), afterGrant = false)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { moveItem = null }) { Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+
+    newAlbumItem?.let { v ->
+        var text by remember(v.id) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { newAlbumItem = null },
+            title = { Text(stringResource(R.string.new_album)) },
+            text = {
+                TextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    placeholder = { Text(stringResource(R.string.new_album_hint)) }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = sanitizeFileName(text).isNotEmpty(),
+                    onClick = {
+                        newAlbumItem = null
+                        execute(PendingOp.Move(v, "Movies/" + sanitizeFileName(text) + "/"), afterGrant = false)
+                    }
+                ) { Text(stringResource(R.string.save)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { newAlbumItem = null }) { Text(stringResource(R.string.cancel)) }
             }
         )
     }
