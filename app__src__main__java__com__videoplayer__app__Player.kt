@@ -230,9 +230,16 @@ private fun pipActions(context: Context, playing: Boolean): List<RemoteAction> {
     return if (rtl) listOf(forward, toggle, rewind) else listOf(rewind, toggle, forward)
 }
 
-private fun pipParams(context: Context, exo: ExoPlayer, playing: Boolean): PictureInPictureParams {
+private fun pipParams(
+    context: Context,
+    exo: ExoPlayer,
+    playing: Boolean,
+    autoEnter: Boolean = false
+): PictureInPictureParams {
     val size = exo.videoSize
     val builder = PictureInPictureParams.Builder().setActions(pipActions(context, playing))
+    // أندرويد 12+: الدخول التلقائي للنافذة المصغّرة عند الخروج من التطبيق (يعمل مع الإيماءات أيضاً)
+    if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(autoEnter)
     if (size.width > 0 && size.height > 0) {
         val ratio = size.width.toFloat() / size.height
         if (ratio in 0.45f..2.3f) builder.setAspectRatio(Rational(size.width, size.height))
@@ -305,6 +312,7 @@ fun PlayerScreen(
     )
 
     var isPlaying by remember { mutableStateOf(false) }
+    var pipTick by remember { mutableStateOf(0) }
     var buffering by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var position by remember { mutableLongStateOf(0L) }
@@ -530,7 +538,9 @@ fun PlayerScreen(
     }
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
         savePosition()
-        if (!inPip && !pipRequested) {
+        // أندرويد 12+: النظام سيدخل النافذة المصغّرة تلقائياً، فلا نوقف الفيديو الآن
+        val autoPipArmed = Build.VERSION.SDK_INT >= 31 && pipSupported && isPlaying && !locked
+        if (!inPip && !pipRequested && !autoPipArmed) {
             // التشغيل في الخلفية: نُبقي الصوت يعمل عبر خدمة أمامية بدل الإيقاف
             if (bgPlay && exo.isPlaying) PlaybackService.start(context, exo, req.title) else exo.pause()
         }
@@ -546,7 +556,7 @@ fun PlayerScreen(
     }
 
     // ---- صورة داخل صورة ----
-    DisposableEffect(activity, exo) {
+    DisposableEffect(activity, exo, locked) {
         val a = activity ?: return@DisposableEffect onDispose { }
         val pipListener = Consumer<PictureInPictureModeChangedInfo> {
             inPip = it.isInPictureInPictureMode
@@ -554,13 +564,38 @@ fun PlayerScreen(
             if (it.isInPictureInPictureMode) controls = false
         }
         val leaveListener = Runnable {
-            if (exo.isPlaying && !locked) pipRequested = enterPip(a, exo)
+            if (pipSupported && exo.isPlaying && !locked) pipRequested = enterPip(a, exo)
         }
         a.addOnPictureInPictureModeChangedListener(pipListener)
         a.addOnUserLeaveHintListener(leaveListener)
         onDispose {
             a.removeOnPictureInPictureModeChangedListener(pipListener)
             a.removeOnUserLeaveHintListener(leaveListener)
+        }
+    }
+
+    // تفعيل الدخول التلقائي للنافذة المصغّرة طالما الفيديو يعمل وغير مقفل
+    LaunchedEffect(exo, isPlaying, locked, inPip, pipTick, pipSupported) {
+        if (Build.VERSION.SDK_INT >= 31 && pipSupported) {
+            activity?.let {
+                runCatching {
+                    it.setPictureInPictureParams(
+                        pipParams(context, exo, isPlaying, autoEnter = isPlaying && !locked)
+                    )
+                }
+            }
+        }
+    }
+    // عند مغادرة شاشة المشغّل نُعطّل الدخول التلقائي حتى لا تظهر نافذة مصغّرة من المكتبة
+    DisposableEffect(activity) {
+        onDispose {
+            if (Build.VERSION.SDK_INT >= 31) {
+                runCatching {
+                    activity?.setPictureInPictureParams(
+                        PictureInPictureParams.Builder().setAutoEnterEnabled(false).build()
+                    )
+                }
+            }
         }
     }
 
@@ -615,6 +650,7 @@ fun PlayerScreen(
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
+                pipTick++
                 if (!rotated && !userSwitched && videoSize.width > videoSize.height && prefs.autoRotate) {
                     rotated = true
                     activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
