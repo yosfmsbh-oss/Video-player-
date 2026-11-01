@@ -105,6 +105,8 @@ fun App(initial: PlayRequest?) {
     var loading by remember { mutableStateOf(true) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var playing by rememberSaveable(stateSaver = PlayRequestSaver) { mutableStateOf(initial) }
+    // قائمة الفيديوهات الحالية للتنقل بالسحب العمودي
+    var playlist by remember { mutableStateOf(emptyList<PlayRequest>()) }
 
     // بعد الرفض المتكرر لا يعرض النظام نافذة الإذن، فنوجّه المستخدم للإعدادات
     val blocked = denials > 0 && !granted && activity != null &&
@@ -120,7 +122,10 @@ fun App(initial: PlayRequest?) {
     val openLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) playing = PlayRequest(uri, queryName(context, uri))
+        if (uri != null) {
+            playlist = emptyList()
+            playing = PlayRequest(uri, queryName(context, uri))
+        }
     }
 
     // يعيد فحص الإذن عند الرجوع من إعدادات النظام
@@ -182,7 +187,10 @@ fun App(initial: PlayRequest?) {
                     )
                 }
             },
-            onPlay = { playing = it },
+            onPlay = { request, list ->
+                playlist = list
+                playing = request
+            },
             onOpenFile = { openLauncher.launch(arrayOf("video/*")) },
             onRefresh = { refreshKey++ }
         )
@@ -191,7 +199,13 @@ fun App(initial: PlayRequest?) {
             BackHandler { playing = null }
             // يمنع وصول اللمس إلى المكتبة التي تحته
             Box(Modifier.fillMaxSize().pointerInput(Unit) { }) {
-                PlayerScreen(current, prefs) { playing = null }
+                PlayerScreen(
+                    req = current,
+                    prefs = prefs,
+                    playlist = playlist,
+                    onChange = { playing = it },
+                    onBack = { playing = null }
+                )
             }
         }
     }

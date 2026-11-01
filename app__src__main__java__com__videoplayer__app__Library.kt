@@ -113,7 +113,7 @@ fun LibraryScreen(
     granted: Boolean,
     blocked: Boolean,
     onGrant: () -> Unit,
-    onPlay: (PlayRequest) -> Unit,
+    onPlay: (PlayRequest, List<PlayRequest>) -> Unit,
     onOpenFile: () -> Unit,
     onRefresh: () -> Unit
 ) {
@@ -331,7 +331,12 @@ fun LibraryScreen(
                     else -> VideoList(
                         items = visible,
                         favs = favs,
-                        onPlay = { onPlay(PlayRequest(it.uri, it.title)) },
+                        onPlay = { v ->
+                            onPlay(
+                                PlayRequest(v.uri, v.title),
+                                visible.map { PlayRequest(it.uri, it.title) }
+                            )
+                        },
                         onFav = { v -> prefs.toggleFavorite(v.id) },
                         onLongPress = { actionItem = it }
                     )

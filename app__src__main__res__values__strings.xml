@@ -91,4 +91,6 @@
     <string name="hud_volume">الصوت %1$d%%</string>
     <string name="hud_fwd">+10 ث</string>
     <string name="hud_back">−10 ث</string>
+    <string name="hud_last">هذا آخر فيديو</string>
+    <string name="hud_first">هذا أول فيديو</string>
 </resources>

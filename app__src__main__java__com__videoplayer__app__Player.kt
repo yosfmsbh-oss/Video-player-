@@ -2,9 +2,14 @@ package com.videoplayer.app
 
 import android.Manifest
 import android.app.Activity
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
+import android.app.RemoteAction
+import android.content.BroadcastReceiver
 import android.content.ContentUris
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -18,6 +23,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -85,6 +93,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -180,19 +189,58 @@ private enum class Axis { Horizontal, Vertical }
 private fun speedLabel(s: Float): String =
     if (s == s.toInt().toFloat()) "${s.toInt()}x" else "${s}x"
 
-private fun enterPip(activity: Activity, exo: ExoPlayer): Boolean {
+private const val PIP_ACTION = "com.videoplayer.app.PIP_CONTROL"
+private const val PIP_REWIND = 1
+private const val PIP_TOGGLE = 2
+private const val PIP_FORWARD = 3
+
+/** أزرار التحكم التي تظهر داخل النافذة المصغّرة: رجوع 10 ث، تشغيل/إيقاف، تقديم 10 ث. */
+private fun pipActions(context: Context, playing: Boolean): List<RemoteAction> {
+    fun action(icon: Int, title: String, code: Int): RemoteAction {
+        val pending = PendingIntent.getBroadcast(
+            context, code,
+            Intent(PIP_ACTION).setPackage(context.packageName).putExtra("code", code),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return RemoteAction(
+            android.graphics.drawable.Icon.createWithResource(context, icon), title, title, pending
+        )
+    }
+    return listOf(
+        action(android.R.drawable.ic_media_rew, context.getString(R.string.back10), PIP_REWIND),
+        action(
+            if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+            context.getString(if (playing) R.string.pause else R.string.play),
+            PIP_TOGGLE
+        ),
+        action(android.R.drawable.ic_media_ff, context.getString(R.string.fwd10), PIP_FORWARD)
+    )
+}
+
+private fun pipParams(context: Context, exo: ExoPlayer, playing: Boolean): PictureInPictureParams {
     val size = exo.videoSize
-    val builder = PictureInPictureParams.Builder()
+    val builder = PictureInPictureParams.Builder().setActions(pipActions(context, playing))
     if (size.width > 0 && size.height > 0) {
         val ratio = size.width.toFloat() / size.height
         if (ratio in 0.45f..2.3f) builder.setAspectRatio(Rational(size.width, size.height))
     }
-    return runCatching { activity.enterPictureInPictureMode(builder.build()) }.getOrDefault(false)
+    return builder.build()
 }
+
+private fun enterPip(activity: Activity, exo: ExoPlayer): Boolean =
+    runCatching {
+        activity.enterPictureInPictureMode(pipParams(activity, exo, exo.isPlaying))
+    }.getOrDefault(false)
 
 @OptIn(UnstableApi::class)
 @Composable
-fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
+fun PlayerScreen(
+    req: PlayRequest,
+    prefs: Prefs,
+    playlist: List<PlayRequest>,
+    onChange: (PlayRequest) -> Unit,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
     val view = LocalView.current
     val activity = remember { context.findActivity() }
@@ -258,6 +306,13 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
     var bgPlay by remember { mutableStateOf(prefs.backgroundPlay) }
+    var vOffset by remember { mutableFloatStateOf(0f) }
+    var vDragging by remember { mutableStateOf(false) }
+    val vAnim by animateFloatAsState(
+        targetValue = vOffset,
+        animationSpec = if (vDragging) snap() else spring(),
+        label = "videoOffset"
+    )
     var openMenu by remember { mutableIntStateOf(0) } // 0 لا شيء، 1 سرعة، 2 ترجمة/صوت، 3 حجم العرض
     var inPip by remember { mutableStateOf(activity?.isInPictureInPictureMode == true) }
     var pipRequested by remember { mutableStateOf(false) }
@@ -305,6 +360,24 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
         touch++
     }
 
+    /** تغيير الفيديو: +1 التالي، -1 السابق (حسب قائمة المكتبة الحالية). */
+    fun goTo(delta: Int) {
+        val idx = playlist.indexOfFirst { it.uri == req.uri }
+        if (idx < 0) return
+        val target = idx + delta
+        if (target !in playlist.indices) {
+            showHud(
+                context.getString(if (delta > 0) R.string.hud_last else R.string.hud_first),
+                Alignment.Center
+            )
+            return
+        }
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        exo.pause()
+        onChange(playlist[target])
+        showHud(playlist[target].title, Alignment.Center)
+    }
+
     fun currentBrightness(): Float {
         val w = activity?.window?.attributes?.screenBrightness ?: -1f
         if (w >= 0f) return w
@@ -340,6 +413,37 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
             exo.playWhenReady = play
             setTextEnabled(true)
         }
+    }
+
+    // عند تغيير الفيديو: نعيد ضبط الحالة المرتبطة بالمشغّل القديم
+    LaunchedEffect(exo) {
+        error = null
+        buffering = true
+        position = 0L
+        duration = 0L
+        captions = false
+        exo.setPlaybackSpeed(speeds[speedIndex])
+    }
+
+    // ---- أزرار التحكم في النافذة المصغّرة ----
+    DisposableEffect(exo) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, intent: Intent) {
+                when (intent.getIntExtra("code", 0)) {
+                    PIP_REWIND -> exo.seekTo((exo.currentPosition - 10_000L).coerceAtLeast(0L))
+                    PIP_TOGGLE -> if (exo.isPlaying) exo.pause() else Util.handlePlayButtonAction(exo)
+                    PIP_FORWARD -> {
+                        val d = exo.duration
+                        val t = exo.currentPosition + 10_000L
+                        exo.seekTo(if (d > 0) t.coerceAtMost(d) else t)
+                    }
+                }
+            }
+        }
+        ContextCompat.registerReceiver(
+            context, receiver, IntentFilter(PIP_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
     }
 
     // ---- دورة حياة المشغّل ----
@@ -417,6 +521,12 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+                // تحديث زر التشغيل/الإيقاف داخل النافذة المصغّرة
+                activity?.let { a ->
+                    if (a.isInPictureInPictureMode) {
+                        runCatching { a.setPictureInPictureParams(pipParams(context, exo, playing)) }
+                    }
+                }
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -496,13 +606,13 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
                 it.player = exo
                 it.resizeMode = resizeModes[resizeIndex]
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = vAnim }
         )
 
         // ---- طبقة الإيماءات ----
         Box(
             Modifier.fillMaxSize()
-                .pointerInput(locked, inPip) {
+                .pointerInput(locked, inPip, exo) {
                     detectTapGestures(
                         onTap = {
                             if (!inPip) {
@@ -522,15 +632,20 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
                         }
                     )
                 }
-                .pointerInput(locked, inPip) {
+                .pointerInput(locked, inPip, exo, playlist) {
                     if (!locked && !inPip) {
                         var axis: Axis? = null
                         var startLeft = true
+                        var startCenter = false
+                        var totalY = 0f
                         var seekTarget = 0L
                         detectDragGestures(
                             onDragStart = { o ->
                                 axis = null
                                 startLeft = o.x < size.width / 2f
+                                // الثلث الأوسط: السحب العمودي يغيّر الفيديو (الأطراف: سطوع/صوت)
+                                startCenter = o.x >= size.width * 0.3f && o.x <= size.width * 0.7f
+                                totalY = 0f
                                 seekTarget = exo.currentPosition
                                 brightness = currentBrightness()
                                 val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
@@ -548,6 +663,11 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
                                             .coerceIn(0L, d)
                                         showHud("${formatTime(seekTarget)} / ${formatTime(d)}", Alignment.Center)
                                     }
+                                } else if (startCenter) {
+                                    totalY += drag.y
+                                    vDragging = true
+                                    val limit = size.height * 0.25f
+                                    vOffset = (totalY * 0.5f).coerceIn(-limit, limit)
                                 } else {
                                     val delta = -drag.y / size.height * 1.2f
                                     if (startLeft) {
@@ -576,9 +696,19 @@ fun PlayerScreen(req: PlayRequest, prefs: Prefs, onBack: () -> Unit) {
                             },
                             onDragEnd = {
                                 if (axis == Axis.Horizontal) exo.seekTo(seekTarget)
+                                if (axis == Axis.Vertical && startCenter) {
+                                    vDragging = false
+                                    vOffset = 0f
+                                    val threshold = size.height * 0.12f
+                                    if (totalY < -threshold) goTo(1) else if (totalY > threshold) goTo(-1)
+                                }
                                 axis = null
                             },
-                            onDragCancel = { axis = null }
+                            onDragCancel = {
+                                vDragging = false
+                                vOffset = 0f
+                                axis = null
+                            }
                         )
                     }
                 }
