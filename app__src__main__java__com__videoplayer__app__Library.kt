@@ -130,7 +130,7 @@ fun LibraryScreen(
     var renameItem by remember { mutableStateOf<VideoItem?>(null) }
     var deleteItem by remember { mutableStateOf<VideoItem?>(null) }
     var pending by remember { mutableStateOf<PendingOp?>(null) }
-    var granted by remember { mutableStateOf<PendingOp?>(null) }
+    var approvedOp by remember { mutableStateOf<PendingOp?>(null) }
     var autoplay by remember { mutableStateOf(prefs.autoplay) }
     var autoRotate by remember { mutableStateOf(prefs.autoRotate) }
     var bgPlay by remember { mutableStateOf(prefs.backgroundPlay) }
@@ -146,7 +146,7 @@ fun LibraryScreen(
     ) { result ->
         val op = pending
         pending = null
-        if (op != null && result.resultCode == Activity.RESULT_OK) granted = op
+        if (op != null && result.resultCode == Activity.RESULT_OK) approvedOp = op
     }
 
     fun execute(op: PendingOp, afterGrant: Boolean) {
@@ -179,9 +179,9 @@ fun LibraryScreen(
         }
     }
 
-    LaunchedEffect(granted) {
-        granted?.let {
-            granted = null
+    LaunchedEffect(approvedOp) {
+        approvedOp?.let {
+            approvedOp = null
             execute(it, afterGrant = true)
         }
     }
