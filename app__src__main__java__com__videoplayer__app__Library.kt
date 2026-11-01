@@ -440,7 +440,11 @@ fun LibraryScreen(
     moveItem?.let { v ->
         // الألبومات الموجودة (ما عدا الحالي) مع مسار كل ألبوم
         val targets = remember(videos, v.id) {
-            videos.filter { it.album != v.album && it.relativePath.isNotBlank() }
+            // أندرويد يسمح بنقل الفيديو فقط إلى مجلدات Movies و DCIM
+            videos.filter {
+                it.album != v.album &&
+                    (it.relativePath.startsWith("Movies/") || it.relativePath.startsWith("DCIM/"))
+            }
                 .groupBy { it.album }
                 .map { (name, list) -> name to list.first().relativePath }
                 .sortedBy { it.first.lowercase() }
