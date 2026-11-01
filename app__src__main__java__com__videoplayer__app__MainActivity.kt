@@ -204,6 +204,7 @@ fun App(initial: PlayRequest?) {
                     prefs = prefs,
                     playlist = playlist,
                     onChange = { playing = it },
+                    onRemoved = { removed -> playlist = playlist.filter { it.uri != removed.uri } },
                     onBack = { playing = null }
                 )
             }

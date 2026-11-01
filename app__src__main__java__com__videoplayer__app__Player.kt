@@ -15,12 +15,14 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.media.AudioManager
 import android.os.Build
+import android.widget.Toast
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Rational
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -55,7 +57,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.ClosedCaption
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Forward10
@@ -68,6 +70,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -76,6 +79,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -172,9 +176,14 @@ fun ActionItem(
     label: String,
     active: Boolean = false,
     showLabel: Boolean = true,
+    tintOverride: Color = Color.Unspecified,
     onClick: () -> Unit
 ) {
-    val tint = if (active) Color(0xFF64D2FF) else Color.White
+    val tint = when {
+        tintOverride != Color.Unspecified -> tintOverride
+        active -> Color(0xFF64D2FF)
+        else -> Color.White
+    }
     Column(
         Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -209,15 +218,16 @@ private fun pipActions(context: Context, playing: Boolean): List<RemoteAction> {
             android.graphics.drawable.Icon.createWithResource(context, icon), title, title, pending
         )
     }
-    return listOf(
-        action(android.R.drawable.ic_media_rew, context.getString(R.string.back10), PIP_REWIND),
-        action(
-            if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
-            context.getString(if (playing) R.string.pause else R.string.play),
-            PIP_TOGGLE
-        ),
-        action(android.R.drawable.ic_media_ff, context.getString(R.string.fwd10), PIP_FORWARD)
+    val rewind = action(R.drawable.pip_rewind, context.getString(R.string.back10), PIP_REWIND)
+    val toggle = action(
+        if (playing) R.drawable.pip_pause else R.drawable.pip_play,
+        context.getString(if (playing) R.string.pause else R.string.play),
+        PIP_TOGGLE
     )
+    val forward = action(R.drawable.pip_forward, context.getString(R.string.fwd10), PIP_FORWARD)
+    // في الواجهات العربية (RTL) يعكس النظام الترتيب، فنعكسه ليبقى «رجوع» يساراً و«تقديم» يميناً
+    val rtl = context.resources.configuration.layoutDirection == android.util.LayoutDirection.RTL
+    return if (rtl) listOf(forward, toggle, rewind) else listOf(rewind, toggle, forward)
 }
 
 private fun pipParams(context: Context, exo: ExoPlayer, playing: Boolean): PictureInPictureParams {
@@ -242,6 +252,7 @@ fun PlayerScreen(
     prefs: Prefs,
     playlist: List<PlayRequest>,
     onChange: (PlayRequest) -> Unit,
+    onRemoved: (PlayRequest) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -397,6 +408,47 @@ fun PlayerScreen(
                 }
             } finally {
                 switching = false
+            }
+        }
+    }
+
+    // ---- حذف الفيديو الحالي ----
+    var confirmDelete by remember { mutableStateOf(false) }
+    var deleteApproved by remember { mutableStateOf(false) }
+    val deleteLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) deleteApproved = true
+    }
+
+    fun finishDelete() {
+        mediaId?.let { prefs.saveFavorites(prefs.favs - it) }
+        prefs.savePosition(req.uri.toString(), 0L)
+        Toast.makeText(context, R.string.toast_deleted, Toast.LENGTH_SHORT).show()
+        val idx = playlist.indexOfFirst { it.uri == req.uri }
+        val next = if (idx >= 0) playlist.getOrNull(idx + 1) ?: playlist.getOrNull(idx - 1) else null
+        onRemoved(req)
+        if (next != null) onChange(next) else onBack()
+    }
+
+    fun deleteCurrent() {
+        exo.pause()
+        when (val r = requestDelete(context, req.uri)) {
+            MediaOp.Success -> finishDelete()
+            is MediaOp.Confirm -> deleteLauncher.launch(IntentSenderRequest.Builder(r.sender).build())
+            MediaOp.Failure -> Toast.makeText(context, R.string.toast_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(deleteApproved) {
+        if (deleteApproved) {
+            deleteApproved = false
+            if (Build.VERSION.SDK_INT >= 30) {
+                finishDelete() // النظام نفّذ الحذف بعد الموافقة
+            } else if (requestDelete(context, req.uri) == MediaOp.Success) {
+                finishDelete()
+            } else {
+                Toast.makeText(context, R.string.toast_failed, Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -909,50 +961,15 @@ fun PlayerScreen(
                                 }
                             }
                         }
-                        // الترجمة ومسار الصوت
-                        Box {
-                            ActionItem(Icons.Rounded.ClosedCaption, stringResource(R.string.captions), active = captions, showLabel = !landscape) {
-                                openMenu = 2
-                            }
-                            DropdownMenu(expanded = openMenu == 2, onDismissRequest = { openMenu = 0 }) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(stringResource(if (captions) R.string.captions_off else R.string.captions_on))
-                                    },
-                                    onClick = {
-                                        setTextEnabled(!captions)
-                                        openMenu = 0
-                                        touch++
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.captions_load)) },
-                                    onClick = {
-                                        openMenu = 0
-                                        subtitleLauncher.launch(arrayOf("*/*"))
-                                    }
-                                )
-                                if (audioOptions.size > 1) {
-                                    HorizontalDivider()
-                                    Text(
-                                        stringResource(R.string.audio_header),
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                    )
-                                    audioOptions.forEach { opt ->
-                                        DropdownMenuItem(
-                                            text = { Text(opt.label) },
-                                            trailingIcon = { if (opt.group.isSelected) Icon(Icons.Rounded.Check, null) },
-                                            onClick = {
-                                                exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                                                    .setOverrideForType(TrackSelectionOverride(opt.group.mediaTrackGroup, 0))
-                                                    .build()
-                                                openMenu = 0
-                                                touch++
-                                            }
-                                        )
-                                    }
-                                }
+                        // الحذف
+                        if (mediaId != null) {
+                            ActionItem(
+                                Icons.Rounded.Delete,
+                                stringResource(R.string.delete),
+                                showLabel = !landscape,
+                                tintOverride = Color(0xFFFF6B6B)
+                            ) {
+                                if (Build.VERSION.SDK_INT >= 30) deleteCurrent() else confirmDelete = true
                             }
                         }
                         // حجم العرض
@@ -988,6 +1005,23 @@ fun PlayerScreen(
                     }
                 }
             }
+        }
+
+        if (confirmDelete) {
+            AlertDialog(
+                onDismissRequest = { confirmDelete = false },
+                title = { Text(stringResource(R.string.delete_title)) },
+                text = { Text(stringResource(R.string.delete_message, req.title)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        confirmDelete = false
+                        deleteCurrent()
+                    }) { Text(stringResource(R.string.delete), color = Color(0xFFFF6B6B)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.cancel)) }
+                }
+            )
         }
 
         // ---- مؤشرات الإيماءات (سطوع/صوت/تقديم) ----

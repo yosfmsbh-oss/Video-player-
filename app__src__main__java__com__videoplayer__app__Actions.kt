@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.widget.Toast
@@ -41,15 +42,15 @@ fun shareVideo(context: Context, item: VideoItem) {
 }
 
 /** أندرويد 11+: نافذة حذف من النظام. أندرويد 10: حذف مباشر أو طلب إذن. */
-fun requestDelete(context: Context, item: VideoItem): MediaOp {
+fun requestDelete(context: Context, uri: Uri): MediaOp {
     val resolver = context.contentResolver
     if (Build.VERSION.SDK_INT >= 30) {
         return runCatching {
-            MediaOp.Confirm(MediaStore.createDeleteRequest(resolver, listOf(item.uri)).intentSender)
+            MediaOp.Confirm(MediaStore.createDeleteRequest(resolver, listOf(uri)).intentSender)
         }.getOrDefault(MediaOp.Failure)
     }
     return try {
-        if (resolver.delete(item.uri, null, null) > 0) MediaOp.Success else MediaOp.Failure
+        if (resolver.delete(uri, null, null) > 0) MediaOp.Success else MediaOp.Failure
     } catch (e: SecurityException) {
         val rse = e as? RecoverableSecurityException
         if (rse != null) MediaOp.Confirm(rse.userAction.actionIntent.intentSender) else MediaOp.Failure

@@ -154,7 +154,7 @@ fun LibraryScreen(
             is PendingOp.Delete ->
                 // أندرويد 11+: النظام نفّذ الحذف بنفسه بعد الموافقة
                 if (afterGrant && Build.VERSION.SDK_INT >= 30) MediaOp.Success
-                else requestDelete(context, op.item)
+                else requestDelete(context, op.item.uri)
             is PendingOp.Rename -> requestRename(context, op.item, op.newTitle)
         }
         when (result) {
