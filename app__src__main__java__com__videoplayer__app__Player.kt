@@ -23,9 +23,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -86,6 +87,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -136,6 +138,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 fun Modifier.glass(shape: Shape, alpha: Float = 0.18f): Modifier =
     this.clip(shape)
@@ -306,13 +309,12 @@ fun PlayerScreen(
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
     var bgPlay by remember { mutableStateOf(prefs.backgroundPlay) }
-    var vOffset by remember { mutableFloatStateOf(0f) }
-    var vDragging by remember { mutableStateOf(false) }
-    val vAnim by animateFloatAsState(
-        targetValue = vOffset,
-        animationSpec = if (vDragging) snap() else spring(),
-        label = "videoOffset"
-    )
+    // حركة انزلاق الفيديو عند التنقل (تتبع الإصبع ثم تنزلق للخارج وتدخل الفيديو الجديد)
+    val slide = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    var switching by remember { mutableStateOf(false) }
+    // بعد أول تنقل بالسحب لا نُدوّر الشاشة تلقائياً عند الوصول لفيديو عريض
+    var userSwitched by remember { mutableStateOf(false) }
     var openMenu by remember { mutableIntStateOf(0) } // 0 لا شيء، 1 سرعة، 2 ترجمة/صوت، 3 حجم العرض
     var inPip by remember { mutableStateOf(activity?.isInPictureInPictureMode == true) }
     var pipRequested by remember { mutableStateOf(false) }
@@ -360,22 +362,43 @@ fun PlayerScreen(
         touch++
     }
 
-    /** تغيير الفيديو: +1 التالي، -1 السابق (حسب قائمة المكتبة الحالية). */
-    fun goTo(delta: Int) {
+    /** تغيير الفيديو: +1 التالي، -1 السابق (حسب قائمة المكتبة الحالية). يعيد true إذا تم التبديل. */
+    fun goTo(delta: Int): Boolean {
         val idx = playlist.indexOfFirst { it.uri == req.uri }
-        if (idx < 0) return
+        if (idx < 0) return false
         val target = idx + delta
         if (target !in playlist.indices) {
             showHud(
                 context.getString(if (delta > 0) R.string.hud_last else R.string.hud_first),
                 Alignment.Center
             )
-            return
+            return false
         }
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         exo.pause()
+        userSwitched = true
         onChange(playlist[target])
         showHud(playlist[target].title, Alignment.Center)
+        return true
+    }
+
+    /** انزلاق للخارج ثم دخول الفيديو الجديد من الجهة المعاكسة. */
+    fun swipeTo(delta: Int, height: Float) {
+        scope.launch {
+            switching = true
+            try {
+                val out = if (delta > 0) -height else height
+                slide.animateTo(out, tween(180, easing = FastOutSlowInEasing))
+                if (goTo(delta)) {
+                    slide.snapTo(-out)
+                    slide.animateTo(0f, tween(280, easing = FastOutSlowInEasing))
+                } else {
+                    slide.animateTo(0f, spring())
+                }
+            } finally {
+                switching = false
+            }
+        }
     }
 
     fun currentBrightness(): Float {
@@ -541,7 +564,7 @@ fun PlayerScreen(
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
-                if (!rotated && videoSize.width > videoSize.height && prefs.autoRotate) {
+                if (!rotated && !userSwitched && videoSize.width > videoSize.height && prefs.autoRotate) {
                     rotated = true
                     activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 }
@@ -606,7 +629,7 @@ fun PlayerScreen(
                 it.player = exo
                 it.resizeMode = resizeModes[resizeIndex]
             },
-            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = vAnim }
+            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = slide.value }
         )
 
         // ---- طبقة الإيماءات ----
@@ -638,6 +661,7 @@ fun PlayerScreen(
                         var startLeft = true
                         var startCenter = false
                         var totalY = 0f
+                        var startTime = 0L
                         var seekTarget = 0L
                         detectDragGestures(
                             onDragStart = { o ->
@@ -646,6 +670,7 @@ fun PlayerScreen(
                                 // الثلث الأوسط: السحب العمودي يغيّر الفيديو (الأطراف: سطوع/صوت)
                                 startCenter = o.x >= size.width * 0.3f && o.x <= size.width * 0.7f
                                 totalY = 0f
+                                startTime = System.currentTimeMillis()
                                 seekTarget = exo.currentPosition
                                 brightness = currentBrightness()
                                 val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
@@ -664,10 +689,11 @@ fun PlayerScreen(
                                         showHud("${formatTime(seekTarget)} / ${formatTime(d)}", Alignment.Center)
                                     }
                                 } else if (startCenter) {
-                                    totalY += drag.y
-                                    vDragging = true
-                                    val limit = size.height * 0.25f
-                                    vOffset = (totalY * 0.5f).coerceIn(-limit, limit)
+                                    if (!switching) {
+                                        totalY += drag.y
+                                        val h = size.height.toFloat()
+                                        scope.launch { slide.snapTo(totalY.coerceIn(-h, h)) }
+                                    }
                                 } else {
                                     val delta = -drag.y / size.height * 1.2f
                                     if (startLeft) {
@@ -696,17 +722,20 @@ fun PlayerScreen(
                             },
                             onDragEnd = {
                                 if (axis == Axis.Horizontal) exo.seekTo(seekTarget)
-                                if (axis == Axis.Vertical && startCenter) {
-                                    vDragging = false
-                                    vOffset = 0f
-                                    val threshold = size.height * 0.12f
-                                    if (totalY < -threshold) goTo(1) else if (totalY > threshold) goTo(-1)
+                                if (axis == Axis.Vertical && startCenter && !switching) {
+                                    val h = size.height.toFloat()
+                                    val quick = System.currentTimeMillis() - startTime < 250L
+                                    val threshold = if (quick) h * 0.05f else h * 0.15f
+                                    when {
+                                        totalY < -threshold -> swipeTo(1, h)
+                                        totalY > threshold -> swipeTo(-1, h)
+                                        else -> scope.launch { slide.animateTo(0f, spring()) }
+                                    }
                                 }
                                 axis = null
                             },
                             onDragCancel = {
-                                vDragging = false
-                                vOffset = 0f
+                                if (startCenter && !switching) scope.launch { slide.animateTo(0f, spring()) }
                                 axis = null
                             }
                         )
