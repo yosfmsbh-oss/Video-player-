@@ -1,0 +1,72 @@
+<resources>
+    <string name="app_name">مشغل الفيديو</string>
+    <string name="video_default">فيديو</string>
+    <string name="album_other">أخرى</string>
+
+    <string name="title_home">فيديوهاتي</string>
+    <string name="title_albums">الألبوم</string>
+    <string name="tab_home">الرئيسية</string>
+    <string name="tab_albums">الألبوم</string>
+    <string name="filter_all">الكل</string>
+    <string name="filter_recent">آخر 7 أيام</string>
+    <string name="filter_favs">المفضلة</string>
+    <string name="search">بحث</string>
+    <string name="clear">مسح</string>
+    <string name="menu_more">المزيد</string>
+    <string name="menu_open">فتح ملف</string>
+    <string name="menu_sort">ترتيب حسب</string>
+    <string name="sort_date">التاريخ</string>
+    <string name="sort_name">الاسم</string>
+    <string name="sort_size">الحجم</string>
+    <string name="menu_refresh">تحديث</string>
+    <string name="menu_settings">الإعدادات</string>
+    <string name="settings_autoplay">تشغيل تلقائي عند الفتح</string>
+    <string name="settings_autorotate">تدوير تلقائي للفيديو العريض</string>
+    <string name="done">تم</string>
+    <string name="perm_needed">نحتاج إذن الوصول إلى الفيديوهات</string>
+    <string name="perm_blocked">تم رفض الإذن. فعّله من إعدادات التطبيق ثم ارجع.</string>
+    <string name="perm_allow">السماح</string>
+    <string name="perm_open_settings">فتح إعدادات التطبيق</string>
+    <string name="empty_videos">لا توجد فيديوهات</string>
+    <string name="empty_albums">لا توجد ألبومات</string>
+    <string name="fav_add">إضافة إلى المفضلة</string>
+    <string name="fav_remove">إزالة من المفضلة</string>
+
+    <plurals name="video_count">
+        <item quantity="zero">لا فيديوهات</item>
+        <item quantity="one">فيديو واحد</item>
+        <item quantity="two">فيديوهان</item>
+        <item quantity="few">%1$s فيديوهات</item>
+        <item quantity="many">%1$s فيديو</item>
+        <item quantity="other">%1$s فيديو</item>
+    </plurals>
+
+    <string name="size_gb">%1$s جيجابايت</string>
+    <string name="size_mb">%1$s ميجابايت</string>
+    <string name="size_kb">%1$s كيلوبايت</string>
+
+    <string name="back">رجوع</string>
+    <string name="back10">رجوع 10 ثوان</string>
+    <string name="fwd10">تقديم 10 ثوان</string>
+    <string name="play">تشغيل</string>
+    <string name="pause">إيقاف مؤقت</string>
+    <string name="captions">الترجمة</string>
+    <string name="captions_on">تشغيل الترجمة</string>
+    <string name="captions_off">إيقاف الترجمة</string>
+    <string name="captions_load">تحميل ملف ترجمة…</string>
+    <string name="audio_header">مسار الصوت</string>
+    <string name="audio_track_n">مسار %1$d</string>
+    <string name="rotate">تدوير</string>
+    <string name="lock">قفل</string>
+    <string name="unlock">فتح القفل</string>
+    <string name="unlock_hint">اضغط مطولاً لفتح القفل</string>
+    <string name="resize_fit">ملاءمة</string>
+    <string name="resize_stretch">تمديد</string>
+    <string name="resize_zoom">تكبير</string>
+    <string name="error_playback">تعذّر تشغيل هذا الفيديو</string>
+    <string name="retry">إعادة المحاولة</string>
+    <string name="hud_brightness">السطوع %1$d%%</string>
+    <string name="hud_volume">الصوت %1$d%%</string>
+    <string name="hud_fwd">+10 ث</string>
+    <string name="hud_back">−10 ث</string>
+</resources>
