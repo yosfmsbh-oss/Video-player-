@@ -139,6 +139,7 @@ fun LibraryScreen(
     var autoplay by remember { mutableStateOf(prefs.autoplay) }
     var autoRotate by remember { mutableStateOf(prefs.autoRotate) }
     var bgPlay by remember { mutableStateOf(prefs.backgroundPlay) }
+    var autoPip by remember { mutableStateOf(prefs.autoPip) }
     val focus = LocalFocusManager.current
     val sortNames = listOf(
         stringResource(R.string.sort_date),
@@ -531,6 +532,10 @@ fun LibraryScreen(
                     SwitchRow(stringResource(R.string.settings_autorotate), autoRotate) {
                         autoRotate = it
                         prefs.autoRotate = it
+                    }
+                    SwitchRow(stringResource(R.string.settings_pip), autoPip) {
+                        autoPip = it
+                        prefs.autoPip = it
                     }
                     SwitchRow(stringResource(R.string.settings_background), bgPlay) {
                         bgPlay = it

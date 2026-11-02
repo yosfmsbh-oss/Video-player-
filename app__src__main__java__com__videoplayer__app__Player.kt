@@ -50,6 +50,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -123,6 +124,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -268,6 +271,11 @@ fun PlayerScreen(
     val haptic = LocalHapticFeedback.current
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val key = req.uri.toString()
+    val density = LocalDensity.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    // مناطق حواف الشاشة المخصصة لإيماءات النظام (الرئيسية/الإشعارات): لا نعتبر السحب منها تغييراً للفيديو
+    val gestureBottom = maxOf(WindowInsets.systemGestures.getBottom(density), with(density) { 56.dp.roundToPx() })
+    val gestureTop = maxOf(WindowInsets.systemGestures.getTop(density), with(density) { 40.dp.roundToPx() })
     val autoplay = remember { prefs.autoplay }
     // معرّف الفيديو في المكتبة (غير متاح للملفات المفتوحة من خارج المكتبة)
     val mediaId = remember(req.uri) {
@@ -328,6 +336,7 @@ fun PlayerScreen(
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
     var bgPlay by remember { mutableStateOf(prefs.backgroundPlay) }
+    var autoPip by remember { mutableStateOf(prefs.autoPip) }
     // حركة انزلاق الفيديو عند التنقل (تتبع الإصبع ثم تنزلق للخارج وتدخل الفيديو الجديد)
     val slide = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -368,6 +377,12 @@ fun PlayerScreen(
         showHud(context.getString(if (bgPlay) R.string.bg_on else R.string.bg_off), Alignment.Center)
     }
 
+    fun toggleAutoPip() {
+        autoPip = !autoPip
+        prefs.autoPip = autoPip
+        showHud(context.getString(if (autoPip) R.string.pip_on else R.string.pip_off), Alignment.Center)
+    }
+
     fun savePosition() {
         val d = exo.duration
         val p = exo.currentPosition
@@ -383,6 +398,8 @@ fun PlayerScreen(
 
     /** تغيير الفيديو: +1 التالي، -1 السابق (حسب قائمة المكتبة الحالية). يعيد true إذا تم التبديل. */
     fun goTo(delta: Int): Boolean {
+        // لا نبدّل الفيديو أثناء مغادرة التطبيق أو في النافذة المصغّرة
+        if (inPip || !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return false
         val idx = playlist.indexOfFirst { it.uri == req.uri }
         if (idx < 0) return false
         val target = idx + delta
@@ -539,7 +556,7 @@ fun PlayerScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
         savePosition()
         // أندرويد 12+: النظام سيدخل النافذة المصغّرة تلقائياً، فلا نوقف الفيديو الآن
-        val autoPipArmed = Build.VERSION.SDK_INT >= 31 && pipSupported && isPlaying && !locked
+        val autoPipArmed = Build.VERSION.SDK_INT >= 31 && pipSupported && autoPip && isPlaying && !locked
         if (!inPip && !pipRequested && !autoPipArmed) {
             // التشغيل في الخلفية: نُبقي الصوت يعمل عبر خدمة أمامية بدل الإيقاف
             if (bgPlay && exo.isPlaying) PlaybackService.start(context, exo, req.title) else exo.pause()
@@ -556,7 +573,7 @@ fun PlayerScreen(
     }
 
     // ---- صورة داخل صورة ----
-    DisposableEffect(activity, exo, locked) {
+    DisposableEffect(activity, exo, locked, autoPip) {
         val a = activity ?: return@DisposableEffect onDispose { }
         val pipListener = Consumer<PictureInPictureModeChangedInfo> {
             inPip = it.isInPictureInPictureMode
@@ -564,7 +581,7 @@ fun PlayerScreen(
             if (it.isInPictureInPictureMode) controls = false
         }
         val leaveListener = Runnable {
-            if (pipSupported && exo.isPlaying && !locked) pipRequested = enterPip(a, exo)
+            if (pipSupported && autoPip && exo.isPlaying && !locked) pipRequested = enterPip(a, exo)
         }
         a.addOnPictureInPictureModeChangedListener(pipListener)
         a.addOnUserLeaveHintListener(leaveListener)
@@ -575,12 +592,12 @@ fun PlayerScreen(
     }
 
     // تفعيل الدخول التلقائي للنافذة المصغّرة طالما الفيديو يعمل وغير مقفل
-    LaunchedEffect(exo, isPlaying, locked, inPip, pipTick, pipSupported) {
+    LaunchedEffect(exo, isPlaying, locked, inPip, pipTick, pipSupported, autoPip) {
         if (Build.VERSION.SDK_INT >= 31 && pipSupported) {
             activity?.let {
                 runCatching {
                     it.setPictureInPictureParams(
-                        pipParams(context, exo, isPlaying, autoEnter = isPlaying && !locked)
+                        pipParams(context, exo, isPlaying, autoEnter = autoPip && isPlaying && !locked)
                     )
                 }
             }
@@ -742,17 +759,19 @@ fun PlayerScreen(
                         }
                     )
                 }
-                .pointerInput(locked, inPip, exo, playlist) {
+                .pointerInput(locked, inPip, exo, playlist, gestureBottom, gestureTop) {
                     if (!locked && !inPip) {
                         var axis: Axis? = null
                         var startLeft = true
                         var startCenter = false
                         var totalY = 0f
                         var startTime = 0L
+                        var ignored = false
                         var seekTarget = 0L
                         detectDragGestures(
                             onDragStart = { o ->
                                 axis = null
+                                ignored = o.y > size.height - gestureBottom || o.y < gestureTop
                                 startLeft = o.x < size.width / 2f
                                 // الثلث الأوسط: السحب العمودي يغيّر الفيديو (الأطراف: سطوع/صوت)
                                 startCenter = o.x >= size.width * 0.3f && o.x <= size.width * 0.7f
@@ -764,6 +783,7 @@ fun PlayerScreen(
                                 volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / max.toFloat()
                             },
                             onDrag = { change, drag ->
+                                if (ignored) return@detectDragGestures
                                 change.consume()
                                 if (axis == null) {
                                     axis = if (abs(drag.x) > abs(drag.y)) Axis.Horizontal else Axis.Vertical
@@ -808,6 +828,10 @@ fun PlayerScreen(
                                 }
                             },
                             onDragEnd = {
+                                if (ignored) {
+                                    ignored = false
+                                    return@detectDragGestures
+                                }
                                 if (axis == Axis.Horizontal) exo.seekTo(seekTarget)
                                 if (axis == Axis.Vertical && startCenter && !switching) {
                                     val h = size.height.toFloat()
@@ -822,6 +846,10 @@ fun PlayerScreen(
                                 axis = null
                             },
                             onDragCancel = {
+                                if (ignored) {
+                                    ignored = false
+                                    return@detectDragGestures
+                                }
                                 if (startCenter && !switching) scope.launch { slide.animateTo(0f, spring()) }
                                 axis = null
                             }
@@ -903,8 +931,16 @@ fun PlayerScreen(
                             touch++
                         }
                         if (pipSupported) {
-                            GlassButton(Icons.Rounded.PictureInPictureAlt, stringResource(R.string.pip), 44.dp, 20.dp) {
-                                activity?.let { pipRequested = enterPip(it, exo) }
+                            // ضغطة: تشغيل/إيقاف النافذة المصغّرة عند الخروج. ضغطة مطوّلة: فتحها الآن
+                            GlassButton(
+                                Icons.Rounded.PictureInPictureAlt,
+                                stringResource(R.string.pip),
+                                44.dp, 20.dp,
+                                tint = if (autoPip) Color(0xFF64D2FF) else Color.White,
+                                onLongClick = { activity?.let { pipRequested = enterPip(it, exo) } }
+                            ) {
+                                toggleAutoPip()
+                                touch++
                             }
                         }
                         if (mediaId != null) {

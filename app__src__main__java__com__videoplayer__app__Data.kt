@@ -183,6 +183,13 @@ class Prefs(context: Context) {
             sp.edit().putBoolean("autoplay", value).apply()
         }
 
+    /** الدخول التلقائي للنافذة المصغّرة عند الخروج من التطبيق (متوقف افتراضياً). */
+    var autoPip: Boolean
+        get() = sp.getBoolean("autopip", false)
+        set(value) {
+            sp.edit().putBoolean("autopip", value).apply()
+        }
+
     var backgroundPlay: Boolean
         get() = sp.getBoolean("bgplay", false)
         set(value) {

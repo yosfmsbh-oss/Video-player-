@@ -50,6 +50,9 @@
     <string name="toast_fav_added">أُضيف إلى المفضلة</string>
     <string name="toast_fav_removed">أُزيل من المفضلة</string>
     <string name="pip">نافذة مصغّرة</string>
+    <string name="pip_on">النافذة المصغّرة عند الخروج: مفعّلة</string>
+    <string name="pip_off">النافذة المصغّرة عند الخروج: متوقفة</string>
+    <string name="settings_pip">نافذة مصغّرة تلقائية عند الخروج</string>
     <string name="bg_play">التشغيل في الخلفية</string>
     <string name="bg_on">التشغيل في الخلفية: مفعّل</string>
     <string name="bg_off">التشغيل في الخلفية: متوقف</string>
